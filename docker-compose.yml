@@ -1,0 +1,43 @@
+services:
+  db:
+    image: mysql:8.4
+    container_name: cine-db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: cine
+      MYSQL_USER: cine
+      MYSQL_PASSWORD: cine
+      TZ: America/Argentina/Buenos_Aires
+    # Argentina no tiene horario de verano, por eso alcanza con un offset fijo.
+    command: ["--default-time-zone=-03:00", "--character-set-server=utf8mb4"]
+    ports:
+      - "3306:3306"
+    volumes:
+      # Los scripts se ejecutan en orden alfabético la primera vez que se crea el volumen.
+      - ./db:/docker-entrypoint-initdb.d:ro
+      - cine-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ucine", "-pcine"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    container_name: cine-api
+    environment:
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: cine
+      DB_PASSWORD: cine
+      DB_NAME: cine
+      PORT: "8080"
+      TZ: America/Argentina/Buenos_Aires
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  cine-data:

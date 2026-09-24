@@ -1,0 +1,244 @@
+openapi: 3.0.3
+info:
+  title: Cine API
+  version: 1.0.0
+  description: |
+    API para consultar la cartelera de un cine, ver los datos de una película y
+    reservar entradas. Toda la lógica de datos se resuelve con stored procedures
+    en MySQL.
+
+    **Nota sobre `/peliculas/{...}`:** el enunciado pide `GET /peliculas/{fecha}`
+    y `GET /peliculas/{IdPelicula}`, que comparten la misma plantilla de ruta.
+    El servidor usa una sola ruta y decide por el formato del parámetro:
+    `AAAA-MM-DD` devuelve la cartelera de esa fecha y un número devuelve el
+    detalle de la película.
+servers:
+  - url: /
+tags:
+  - name: Películas
+  - name: Reservas
+  - name: Sistema
+
+paths:
+  /peliculas/{fecha}:
+    get:
+      tags: [Películas]
+      summary: Películas en cartelera según fecha
+      description: Ejecuta `sp_PeliculasEnCartelera`. Lista las funciones activas de la fecha, de películas y salas activas.
+      operationId: getCartelera
+      parameters:
+        - name: fecha
+          in: path
+          required: true
+          description: Fecha con formato AAAA-MM-DD
+          schema:
+            type: string
+            format: date
+            example: "2026-09-23"
+      responses:
+        "200":
+          description: Funciones de la fecha (lista vacía si no hay)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FuncionCartelera"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /peliculas/{idPelicula}:
+    get:
+      tags: [Películas]
+      summary: Datos de una película en particular
+      description: Ejecuta `sp_ConsultarPelicula`. Devuelve los datos de la película y sus próximas funciones.
+      operationId: getPelicula
+      parameters:
+        - name: idPelicula
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            example: 1
+      responses:
+        "200":
+          description: Película encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Pelicula"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: La película no existe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /reservas:
+    post:
+      tags: [Reservas]
+      summary: Reservar entradas para una función
+      description: |
+        Ejecuta `sp_ReservarFuncion`. Asigna automáticamente las primeras
+        butacas libres (por fila y columna) y crea una reserva por butaca.
+
+        | codigo | HTTP | Significado |
+        |---|---|---|
+        | 0 | 201 | Reserva OK |
+        | 1 | 400 | Datos inválidos |
+        | 2 | 404 | La función no existe |
+        | 3 | 409 | La función no está activa o ya comenzó |
+        | 4 | 409 | No hay butacas suficientes |
+        | 99 | 500 | Error inesperado |
+      operationId: postReserva
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReservaRequest"
+      responses:
+        "201":
+          description: Reserva realizada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoReserva"
+              example:
+                codigo: 0
+                mensaje: OK. Se reservaron 2 entrada(s) para la función 3
+                reservas:
+                  - { idReserva: 1, idButaca: 1, nroButaca: 1, fila: 1, columna: 1 }
+                  - { idReserva: 2, idButaca: 2, nroButaca: 2, fila: 1, columna: 2 }
+        "400":
+          description: Datos inválidos
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ResultadoReserva"
+                  - $ref: "#/components/schemas/Error"
+        "404":
+          description: La función no existe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoReserva"
+              example: { codigo: 2, mensaje: La función 999 no existe }
+        "409":
+          description: Función no disponible o sin butacas suficientes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResultadoReserva"
+              example: { codigo: 4, mensaje: "No hay butacas suficientes. Solicitadas: 11, disponibles: 10" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /health:
+    get:
+      tags: [Sistema]
+      summary: Estado de la API y de la base de datos
+      operationId: getHealth
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        "503":
+          description: La base de datos no responde
+
+components:
+  responses:
+    BadRequest:
+      description: Parámetro inválido
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    InternalError:
+      description: Error interno
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        mensaje: { type: string }
+
+    FuncionCartelera:
+      type: object
+      properties:
+        idFuncion: { type: integer, example: 3 }
+        idPelicula: { type: integer, example: 1 }
+        idSala: { type: integer, example: 1 }
+        pelicula: { type: string, example: Interestelar }
+        sala: { type: string, example: Sala 1 }
+        horaInicio: { type: string, example: "18:00:00" }
+        precio: { type: number, example: 5500 }
+        butacasDisponibles: { type: integer, example: 39 }
+
+    Pelicula:
+      type: object
+      properties:
+        idPelicula: { type: integer, example: 1 }
+        pelicula: { type: string, example: Interestelar }
+        sinopsis: { type: string }
+        duracion: { type: integer, description: Duración en minutos, example: 169 }
+        actores: { type: string }
+        genero:
+          type: object
+          properties:
+            idGenero: { type: integer, example: 4 }
+            genero: { type: string, example: Ciencia Ficción }
+        estado: { type: string, enum: [A, I] }
+        observaciones: { type: string, nullable: true }
+        proximasFunciones:
+          type: array
+          items:
+            type: object
+            properties:
+              idFuncion: { type: integer }
+              idSala: { type: integer }
+              sala: { type: string }
+              fechaProbableInicio: { type: string, format: date-time }
+              fechaProbableFin: { type: string, format: date-time }
+              precio: { type: number }
+
+    ReservaRequest:
+      type: object
+      required: [idFuncion, cantidad, dni]
+      properties:
+        idFuncion: { type: integer, minimum: 1, example: 3 }
+        cantidad: { type: integer, minimum: 1, example: 2 }
+        dni: { type: string, pattern: '^\d{7,11}$', example: "30123456" }
+
+    ResultadoReserva:
+      type: object
+      properties:
+        codigo: { type: integer, example: 0 }
+        mensaje: { type: string }
+        reservas:
+          type: array
+          items:
+            type: object
+            properties:
+              idReserva: { type: integer }
+              idButaca: { type: integer }
+              nroButaca: { type: integer }
+              fila: { type: integer }
+              columna: { type: integer }
